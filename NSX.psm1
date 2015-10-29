@@ -435,6 +435,44 @@ function Get-NSXEdge {
             }
         }
         
+        $xml.edge | Add-Member -Force -MemberType ScriptMethod -Name EnableHA -Value {
+            param (
+                [Parameter(Mandatory=$true)]$vnicNo,
+                [Parameter(Mandatory=$false)]$declareDeadTime = 15
+            )
+            [System.Net.WebClient]$client = $global:nsx_api_client
+            $ha = $this.features.highAvailability
+            if($ha.enabled -ne "true"){
+                $ha.enabled = "true"
+                $vnic = $ha.OwnerDocument.CreateElement("vnic")
+                $vnic.InnerText = $vnicNo
+                $ha.ChildNodes | %{ if($_.Name -eq "vnic"){ $ha.removeChild($_) | Out-Null } }
+                $ha.AppendChild($vnic) | Out-Null
+                $ha.declareDeadTime = $declareDeadTime
+                $edgeId = $this.id
+                $client.Headers.Add("Content-Type", "application/xml")
+                $client.UploadString("/api/4.0/edges/$edgeId/highavailability/config", "PUT", $ha.OuterXml)
+                "Successfully Enabled." | Out-Host
+            } else {
+                "Already Enabled." | Out-Host
+            }
+        }
+        
+        $xml.edge | Add-Member -Force -MemberType ScriptMethod -Name DisableHA -Value {
+            [System.Net.WebClient]$client = $global:nsx_api_client
+            $ha = $this.features.highAvailability
+            if($ha.enabled -ne "false"){
+                $ha.enabled = "false"
+                $ha.ChildNodes | %{ if($_.Name -eq "vnic"){ $ha.removeChild($_) | Out-Null } }
+                $edgeId = $this.id
+                $client.Headers.Add("Content-Type", "application/xml")
+                $client.UploadString("/api/4.0/edges/$edgeId/highavailability/config", "PUT", $ha.OuterXml)
+                "Successfully Disabled." | Out-Host
+            } else {
+                "Already Disabled." | Out-Host
+            }
+        }
+        
         return $xml.edge
     }
 }
