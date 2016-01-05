@@ -22,6 +22,37 @@ function Connect-NSXManager {
 }
 
 ##################################################
+# Users / Roles
+##################################################
+
+function Get-NSXUsers {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$false)]
+        [System.Net.WebClient]$client = $global:nsx_api_client
+    )
+    process {
+        [xml]$xml = $client.DownloadString("/api/2.0/services/usermgmt/users/vsm")
+        return $xml
+    }
+}
+
+function Get-NSXRoleFromUserId {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true,Position=0)]
+        [String]$userId,
+        [Parameter(Mandatory=$false)]
+        [System.Net.WebClient]$client = $global:nsx_api_client
+    )
+    process {
+        $userId = ($userId -split "\\"| sort) -join("@")
+        [xml]$xml = $client.DownloadString("/api/2.0/services/usermgmt/role/$userId")
+        return $xml.accessControlEntry.role
+    }
+}
+
+##################################################
 # Controller
 ##################################################
 
