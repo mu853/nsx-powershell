@@ -165,7 +165,18 @@ function Get-NSXManagerSyslog {
         [Parameter(Mandatory=$false)]
         [System.Net.WebClient]$client = $global:nsx_api_client
     )
-    $client.DownloadString("/api/1.0/appliance-management/system/syslogserver")
+    $json = $client.DownloadString("/api/1.0/appliance-management/system/syslogserver")
+    if(!$json){ $json = "not set." }
+    return $json
+}
+
+function Remove-NSXManagerSyslog {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory=$false)]
+        [System.Net.WebClient]$client = $global:nsx_api_client
+    )
+    $client.UploadString("/api/1.0/appliance-management/system/syslogserver", "DELETE", "")
 }
 
 function Enable-NSXManagerActivityMonitoringSyslog {
