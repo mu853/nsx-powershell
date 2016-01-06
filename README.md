@@ -112,3 +112,9 @@ Detach-NSXSecurityTag -securityTagName "hoge" -vmname "Web-01"
 } | sort | ft -AutoSize
 ```
 
+
+### get ESG interfaces
+
+```powershell
+Get-NSXEdges | where type -eq gatewayServices | %{ $_.name, $_.Interfaces() }
+```

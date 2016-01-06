@@ -400,7 +400,8 @@ function Get-NSXEdge {
     process {
         [xml]$xml = $client.DownloadString("/api/4.0/edges/$edgeId")
         
-        $unconnectedLIF = $xml.edge.interfaces.interface | ?{ ! $_.addressGroups }
+        # if unconnected lif exists in xml, POST/PUT/DELETE method fails.
+        $unconnectedLIF = $xml.edge.interfaces.interface | ?{ ! $_.portgroupId }
         if($unconnectedLIF){
             $unconnectedLIF | %{ $xml.edge.interfaces.RemoveChild($_) | Out-Null }
         }
@@ -415,6 +416,24 @@ function Get-NSXEdge {
             $edgeId = $this.id
             $client.Headers.Add("Content-Type", "application/xml")
             $client.UploadString("/api/4.0/edges/$edgeId", "PUT", $this.OuterXml)
+        }
+        
+        $xml.edge | Add-Member -Force -MemberType ScriptMethod -Name Interfaces -Value {
+            $this.vnics.vnic | where portgroupId | %{
+                $ad = ""
+                $_.addressGroups.addressGroup | %{
+                    if(! $_){ return }
+                    $prefix = $_.subnetPrefixLength
+                    $ad += "{0}/{1}" -F $_.primaryAddress, $prefix
+                    $_.secondaryAddresses.ipAddress | %{
+                        if($_){ $ad += ", {0}/{1}" -F $_, $prefix }
+                    }
+                }
+                $h = New-Object PSObject -Property @{}
+                $_.ChildNodes | %{ Add-Member -MemberType NoteProperty -Name $_.Name -Value $_.'#text' -InputObject $h }
+                Add-Member -MemberType NoteProperty -Name "address" -Value $ad -InputObject $h
+                $h | select * -ExcludeProperty addressGroups
+            } | ft * -AutoSize
         }
         
         $xml.edge | Add-Member -Force -MemberType ScriptMethod -Name DeleteAllInterfaces -Value {
