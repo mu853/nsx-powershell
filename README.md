@@ -89,9 +89,11 @@ for unset, use ```DisableSyslog``` method.
 ```powershell
 $vnic = 1
 $timeout = 6
-$edge = Get-NSXEdges "edge-1"
+$edge = Get-NSXEdge "edge-1"
 $edge.EnableHA($vnic, $timeout)
 ```
+
+for unset, use ```DisableHA``` method.
 
 
 ### attach/detach SecurityTag
