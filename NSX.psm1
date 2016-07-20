@@ -201,6 +201,20 @@ function Disable-NSXManagerActivityMonitoringSyslog {
 # DFW
 ##################################################
 
+function Get-NSXDFWRaw {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory=$false,Position=0)]
+        [String]$sectionId,
+        [Parameter(Mandatory=$false)]
+        [System.Net.WebClient]$client = $global:nsx_api_client
+    )
+    process {
+        [xml]$xml = $client.DownloadString("/api/4.0/firewall/globalroot-0/config")
+        return $xml
+    }
+}
+
 function Get-NSXDFW {
     [CmdletBinding()]
     param (
@@ -353,27 +367,51 @@ function Copy-NSXDFWSection {
     }
 }
 
-function Get-NSXServices {
+##################################################
+# Edge
+##################################################
+
+function New-NSXEdge {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$false,Position=0)]
-        [string]$searchString,
+        [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=0)]
+        [String]$name,
+        [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=0)]
+        [String]$clusterName,
+        [Parameter(Mandatory=$false,ValueFromPipeline=$true,Position=0)]
+        [String]$hostName,
+        [Parameter(Mandatory=$false,ValueFromPipeline=$true,Position=0)]
+        [String]$datastoreName,
+        [Parameter(Mandatory=$false,ValueFromPipeline=$true,Position=0)]
+        [String]$portGroupName,
+        [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=0)]
+        [String]$ipaddr,
+        [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=0)]
+        [String]$netmask,
+        [Parameter(Mandatory=$false,ValueFromPipeline=$true,Position=0)]
+        [String]$ifName = "Uplink",
         [Parameter(Mandatory=$false)]
         [System.Net.WebClient]$client = $global:nsx_api_client
     )
     process {
-        [xml]$xml = $client.DownloadString("/api/2.0/services/application/scope/globalroot-0")
-        if($searchString){
-            $xml.list.application | ?{ $_.OuterXml -like ("*{0}*" -F $searchString) }
-        }else{
-            $xml.list.application
+        [xml]$xml = "<edge><datacenterMoid></datacenterMoid><name></name><appliances><appliance><resourcePoolId></resourcePoolId><datastoreId></datastoreId><hostId></hostId><cpuReservation><reservation>0</reservation></cpuReservation><memoryReservation><reservation>0</reservation></memoryReservation></appliance></appliances><vnics><vnic><index>0</index><name></name><type>uplink</type><portgroupId></portgroupId><addressGroups><addressGroup><primaryAddress></primaryAddress><subnetMask></subnetMask></addressGroup></addressGroups><isConnected>true</isConnected></vnic></vnics></edge>"
+        $e = $xml.edge
+        $e.datacenterMoid = (Get-Datacenter)[0].ExtensionData.MoRef.Value
+        $e.name = $name
+        $e.appliances.appliance.resourcePoolId = (Get-Cluster $clusterName)[0].ExtensionData.MoRef.Value
+        $e.appliances.appliance.datastoreId = (Get-Datastore $datastoreName)[0].ExtensionData.MoRef.Value
+        if($hostName){
+            $e.appliances.appliance.hostId = (Get-VMHost $hostName)[0].ExtensionData.MoRef.Value
         }
+        $e.vnics.vnic.name = $ifName
+        $e.vnics.vnic.portgroupId = (Get-VDPortgroup $portGroupName)[0].ExtensionData.MoRef.Value
+        $e.vnics.vnic.addressGroups.addressGroup.primaryAddress = $ipaddr
+        $e.vnics.vnic.addressGroups.addressGroup.subnetMask = $netmask
+
+        $client.Headers.Add("Content-Type", "application/xml")
+        $client.UploadString("/api/4.0/edges", "POST", $xml.OuterXml)
     }
 }
-
-##################################################
-# Edge
-##################################################
 
 function Get-NSXEdges {
     [CmdletBinding()]
@@ -416,6 +454,13 @@ function Get-NSXEdge {
             $edgeId = $this.id
             $client.Headers.Add("Content-Type", "application/xml")
             $client.UploadString("/api/4.0/edges/$edgeId", "PUT", $this.OuterXml)
+        }
+
+        $xml.edge | Add-Member -Force -MemberType ScriptMethod -Name Delete -Value {
+            [System.Net.WebClient]$client = $global:nsx_api_client
+            $edgeId = $this.id
+            $client.Headers.Add("Content-Type", "application/xml")
+            $client.UploadString("/api/4.0/edges/$edgeId", "DELETE", "")
         }
         
         $xml.edge | Add-Member -Force -MemberType ScriptMethod -Name Interfaces -Value {
@@ -571,6 +616,10 @@ function New-NSXL2Bridge {
     }
 }
 
+##################################################
+# Logical Switch
+##################################################
+
 function Get-NSXLogicalSwitches {
     [CmdletBinding()]
     param(
@@ -579,21 +628,18 @@ function Get-NSXLogicalSwitches {
     )
     process {
         [xml]$xml = $client.DownloadString("/api/2.0/vdn/virtualwires")
-        $xml.virtualWires.dataPage.virtualWire
-    }
-}
-
-function Get-NSXLogicalSwitch {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=0)]
-        [string]$id,
-        [Parameter(Mandatory=$false)]
-        [System.Net.WebClient]$client = $global:nsx_api_client
-    )
-    process {
-        [xml]$xml = $client.DownloadString("/api/2.0/vdn/virtualwires/$id")
-        $xml.virtualWire
+        $ls = $xml.virtualWires.dataPage.virtualWire
+        if(ls){
+            $ls | %{
+                $_ | Add-Member -Force -MemberType ScriptMethod -Name Delete -Value {
+                    [System.Net.WebClient]$client = $global:nsx_api_client
+                    $id = $this.objectId
+                    $client.Headers.Add("Content-Type", "application/xml")
+                    $client.UploadString("/api/2.0/vdn/virtualwires/$id", "DELETE", "")
+                }
+            }
+        }
+        return $ls
     }
 }
 
@@ -606,82 +652,26 @@ function New-NSXLogicalSwitch {
         [string]$description = "",
         [Parameter(Mandatory=$false,ValueFromPipeline=$true,Position=2)]
         [string]$tenantId = "virtual wire tenant",
-        [Parameter(Mandatory=$false,ValueFromPipeline=$true,Position=3)]
-        [string]$scopeId = "vdnscope-1",
         [Parameter(Mandatory=$false)]
         [System.Net.WebClient]$client = $global:nsx_api_client
     )
     process {
-        # Create XML
-        [xml]$xml = '<?xml version="1.0" encoding="UTF-8"?><virtualWireCreateSpec><name></name><description></description><tenantId></tenantId></virtualWireCreateSpec>'
-        $xml.virtualWireCreateSpec.name = $name
-        $xml.virtualWireCreateSpec.description = $description
-        $xml.virtualWireCreateSpec.tenantId = $tenantId
-
+        [xml]$transportZone = $c.DownloadString("/api/2.0/vdn/scopes")
+        $scopeId = $t.vdnScopes.vdnScope.objectId
+        
+        [xml]$xml = "<virtualWireCreateSpec><name></name><description></description><tenantId></tenantId><guestVlanAllowed>true</guestVlanAllowed></virtualWireCreateSpec>"
+        $ls = $xml.virtualWireCreateSpec
+        $ls.name = $name
+        $ls.description = $description
+        $ls.tenantId = $tenantId
         $client.Headers.Add("Content-Type", "application/xml")
         $client.UploadString("/api/2.0/vdn/scopes/$scopeId/virtualwires", "POST", $xml.OuterXml)
     }
 }
 
-function Remove-NSXLogicalSwitch {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=0)]
-        [string]$id,
-        [Parameter(Mandatory=$false)]
-        [System.Net.WebClient]$client = $global:nsx_api_client
-    )
-    process {
-        $client.UploadString("/api/2.0/vdn/virtualwires/$id", "DELETE", "")
-    }
-}
-
-function Get-NSXVM {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=0)]
-        $lss,
-        [Parameter(Mandatory=$false)]
-        [System.Net.WebClient]$client = $global:nsx_api_client
-    )
-    process {
-        $result = @()
-        $lss | %{
-            $r = @{} | select LS,VNI,DVPort,VMName,Id,Host,PowerState
-            $ls = $_
-            
-            $r.LS  = $ls.Name
-            $r.VNI = $ls.vdnId
-            
-            # get key list (dvportgroup-219, dvportgroup-410..)
-            $keys = $ls.vdsContextWithBacking | where backingType -eq "portgroup" | select backingValue
-
-            # get distributed virtual portgroups
-            $dvps = Get-VirtualPortGroup | where key -in $keys.backingValue
-
-            $dvps | %{
-                $dvp = $_
-                $r.DVPort = $dvp.Name
-            
-                $vmlist = Get-VM -DistributedSwitch $dvp.VirtualSwitch
-                $vmlist | %{
-                    $vm = $_
-                    Get-NetworkAdapter $vm | %{
-                        $adapter = $_
-                        if($adapter.NetworkName -eq $dvp.Name){
-                            $r.VMName     = $vm.Name
-                            $r.Id         = $vm.Id
-                            $r.Host       = $vm.VMHost
-                            $r.PowerState = $vm.PowerState
-                            if($r -notin $result){ $result += $r }
-                        }
-                    }
-                }
-            }
-        }
-        $result
-    }
-}
+##################################################
+# Security Group
+##################################################
 
 function Get-NSXSecurityGroups {
     [CmdletBinding()]
@@ -693,34 +683,67 @@ function Get-NSXSecurityGroups {
     )
     process {
         [xml]$xml = $client.DownloadString("/api/2.0/services/securitygroup/scope/$scopeId")
-        $xml.list.securitygroup
+        $sg = $xml.list.securitygroup | where name -ne "Activity Monitoring Data Collection"
+        if($sg){
+            $sg | %{
+                $_ | Add-Member -Force -MemberType ScriptMethod -Name Delete -Value {
+                    [System.Net.WebClient]$client = $global:nsx_api_client
+                    $id = $this.objectId
+                    $client.Headers.Add("Content-Type", "application/xml")
+                    $client.UploadString("/api/2.0/services/securitygroup/$id", "DELETE", "")
+                }
+            }
+        }
+        return $sg
     }
 }
 
-function Get-NSXSecurityGroup {
+##################################################
+# Security Tag
+##################################################
+
+function New-NSXSecurityTag {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=0)]
-        [String]$securityGroupId,
+        [string]$name,
+        [Parameter(Mandatory=$false,ValueFromPipeline=$true,Position=0)]
+        [string]$description="",
         [Parameter(Mandatory=$false)]
         [System.Net.WebClient]$client = $global:nsx_api_client
     )
     process {
-        [xml]$xml = $client.DownloadString("/api/2.0/services/securitygroup/$securityGroupId")
-        $xml.securitygroup
+        [xml]$xml = "<securityTag><objectTypeName>SecurityTag</objectTypeName><type><typeName>SecurityTag</typeName></type><name></name><description></description><extendedAttributes></extendedAttributes></securityTag>"
+        $tag = $xml.securityTag
+        $tag.name = $name
+        $tag.description = $description
+        $client.Headers.Add("Content-Type", "application/xml")
+        $client.UploadString("/api/2.0/services/securitytags/tag", "POST", $xml.OuterXml)
     }
 }
 
-function Remove-NSXSecurityGroup {
+function Get-NSXSecurityTag {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=0)]
-        [String]$securityGroupId,
+        [Parameter(Mandatory=$false,ValueFromPipeline=$true,Position=0)]
+        [String]$scopeId = "globalroot-0",
         [Parameter(Mandatory=$false)]
         [System.Net.WebClient]$client = $global:nsx_api_client
     )
     process {
-        $client.UploadString("/api/2.0/services/securitygroup/$securityGroupId", "DELETE", "")
+        [xml]$xml = $client.DownloadString("/api/2.0/services/securitytags/tag")
+        $tags = $xml.securityTags.securityTag | where systemResource -eq $false
+        if($tags){
+            $tags | %{
+                $_ | Add-Member -Force -MemberType ScriptMethod -Name Delete -Value {
+                    [System.Net.WebClient]$client = $global:nsx_api_client
+                    $id = $this.objectId
+                    $client.Headers.Add("Content-Type", "applicationgroup/xml")
+                    $client.UploadString("/api/2.0/services/securitytags/tag/$id", "DELETE", "")
+                }
+            }
+        }
+        return $tags
     }
 }
 
@@ -781,6 +804,254 @@ function Detach-NSXSecurityTag {
             return $false
         }
         $client.UploadString("/api/2.0/services/securitytags/tag/$securityTagId/vm/$vmmoref", "DELETE", "")
+    }
+}
+
+##################################################
+# MAC Set
+##################################################
+
+function New-NSXMACSet {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=0)]
+        [string]$name,
+        [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=2)]
+        [string]$macset_csv,
+        [Parameter(Mandatory=$false)]
+        [System.Net.WebClient]$client = $global:nsx_api_client
+    )
+    process {
+        [xml]$transportZone = $c.DownloadString("/api/2.0/vdn/scopes")
+        $scopeId = $t.vdnScopes.vdnScope.objectId
+        
+        [xml]$xml = "<macset><objectId></objectId><type><typeName /></type><description></description><name></name><revision>0</revision><objectTypeName></objectTypeName><value></value></macset>"
+        $m = $xml.macset
+        $m.name = $name
+        $m.value = $macset_csv
+        $client.Headers.Add("Content-Type", "application/xml")
+        $client.UploadString("/api/2.0/services/macset/globalroot-0", "POST", $xml.OuterXml)
+    }
+}
+
+function Get-NSXMAXSets {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$false,ValueFromPipeline=$true,Position=0)]
+        [String]$scopeId = "globalroot-0",
+        [Parameter(Mandatory=$false)]
+        [System.Net.WebClient]$client = $global:nsx_api_client
+    )
+    process {
+        [xml]$xml = $client.DownloadString("/api/2.0/services/macset/scope/$scopeId")
+        $macsets = $xml.list.macset | where name -ne "system-generated-broadcast-macset"
+        if($macsets){
+            $macsets | %{
+                $_ | Add-Member -Force -MemberType ScriptMethod -Name Delete -Value {
+                    [System.Net.WebClient]$client = $global:nsx_api_client
+                    $id = $this.objectId
+                    $client.Headers.Add("Content-Type", "application/xml")
+                    $client.UploadString("/api/2.0/services/macset/$id", "DELETE", "")
+                }
+            }
+        }
+        return $macsets
+    }
+}
+
+##################################################
+# IPSet
+##################################################
+
+function New-NSXIPSet {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=0)]
+        [string]$name,
+        [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=2)]
+        [string]$ipset_csv,
+        [Parameter(Mandatory=$false)]
+        [System.Net.WebClient]$client = $global:nsx_api_client
+    )
+    process {
+        [xml]$transportZone = $c.DownloadString("/api/2.0/vdn/scopes")
+        $scopeId = $t.vdnScopes.vdnScope.objectId
+        
+        [xml]$xml = "<ipset><type><typeName>IPSet</typeName></type><description></description><name></name><value></value><inheritanceAllowed>false</inheritanceAllowed></ipset>"
+        $m = $xml.ipset
+        $m.name = $name
+        $m.value = $ipset_csv
+        $client.Headers.Add("Content-Type", "application/xml")
+        $client.UploadString("/api/2.0/services/ipset/globalroot-0", "POST", $xml.OuterXml)
+    }
+}
+
+function Get-NSXIPSets {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$false,ValueFromPipeline=$true,Position=0)]
+        [String]$scopeId = "globalroot-0",
+        [Parameter(Mandatory=$false)]
+        [System.Net.WebClient]$client = $global:nsx_api_client
+    )
+    process {
+        [xml]$xml = $client.DownloadString("/api/2.0/services/ipset/scope/$scopeId")
+        $ipsets = $xml.list.ipset | where name -ne "sys-gen-empty-ipset-edge-fw"
+        if($ipsets){
+            $ipsets | %{
+                $_ | Add-Member -Force -MemberType ScriptMethod -Name Delete -Value {
+                    [System.Net.WebClient]$client = $global:nsx_api_client
+                    $id = $this.objectId
+                    $client.Headers.Add("Content-Type", "application/xml")
+                    $client.UploadString("/api/2.0/services/ipset/$id", "DELETE", "")
+                }
+            }
+        }
+        return $ipsets
+    }
+}
+
+##################################################
+# Service / Service Groups
+##################################################
+
+function Get-NSXServices {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$false,ValueFromPipeline=$true,Position=0)]
+        [String]$scopeId = "globalroot-0",
+        [Parameter(Mandatory=$false,Position=0)]
+        [string]$searchString,
+        [Parameter(Mandatory=$false)]
+        [System.Net.WebClient]$client = $global:nsx_api_client
+    )
+    process {
+        [xml]$xml = $client.DownloadString("/api/2.0/services/application/scope/$scopeId")
+        $services = $xml.list.application | where name -ne "sys-gen-empty-app-edge-fw"
+        if($searchString){
+            $services = $services | ?{ $_.OuterXml -like ("*{0}*" -F $searchString) }
+        }
+        if($services){
+            $services | %{
+                $_ | Add-Member -Force -MemberType ScriptMethod -Name Delete -Value {
+                    [System.Net.WebClient]$client = $global:nsx_api_client
+                    $id = $this.objectId
+                    $client.Headers.Add("Content-Type", "application/xml")
+                    $client.UploadString("/api/2.0/services/application/$id", "DELETE", "")
+                }
+            }
+        }
+        return $services
+    }
+}
+
+function Get-NSXServiceGroups {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$false,ValueFromPipeline=$true,Position=0)]
+        [String]$scopeId = "globalroot-0",
+        [Parameter(Mandatory=$false,Position=0)]
+        [string]$searchString,
+        [Parameter(Mandatory=$false)]
+        [System.Net.WebClient]$client = $global:nsx_api_client
+    )
+    process {
+        [xml]$xml = $client.DownloadString("/api/2.0/services/applicationgroup/scope/$scopeId")
+        $serviceGroups = $xml.list.applicationgroup
+        if($searchString){
+            $serviceGroups = $serviceGroups | ?{ $_.OuterXml -like ("*{0}*" -F $searchString) }
+        }
+        if($serviceGroups){
+            $serviceGroups | %{
+                $_ | Add-Member -Force -MemberType ScriptMethod -Name Delete -Value {
+                    [System.Net.WebClient]$client = $global:nsx_api_client
+                    $id = $this.objectId
+                    $client.Headers.Add("Content-Type", "applicationgroup/xml")
+                    $client.UploadString("/api/2.0/services/applicationgroup/$id", "DELETE", "")
+                }
+            }
+        }
+        return $serviceGroups
+    }
+}
+
+##################################################
+# Exclusion List
+##################################################
+
+function Get-NSXExclusionList {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$false,ValueFromPipeline=$true,Position=0)]
+        [String]$scopeId = "globalroot-0",
+        [Parameter(Mandatory=$false)]
+        [System.Net.WebClient]$client = $global:nsx_api_client
+    )
+    process {
+        [xml]$xml = $client.DownloadString("/api/2.1/app/excludelist")
+        $memeber = $xml.VshieldAppConfiguration.excludeListConfiguration.excludeMember.member
+        if($member){
+            $memeber | %{
+                $_ | Add-Member -Force -MemberType ScriptMethod -Name Delete -Value {
+                    [System.Net.WebClient]$client = $global:nsx_api_client
+                    $id = $this.objectId
+                    $client.Headers.Add("Content-Type", "applicationgroup/xml")
+                    $client.UploadString("/api/2.1/app/excludelist/$id", "DELETE", "")
+                }
+            }
+        }
+        return $memeber
+    }
+}
+
+##################################################
+# Other
+##################################################
+
+function Get-NSXVM {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true,ValueFromPipeline=$true,Position=0)]
+        $lss,
+        [Parameter(Mandatory=$false)]
+        [System.Net.WebClient]$client = $global:nsx_api_client
+    )
+    process {
+        $result = @()
+        $lss | %{
+            $r = @{} | select LS,VNI,DVPort,VMName,Id,Host,PowerState
+            $ls = $_
+            
+            $r.LS  = $ls.Name
+            $r.VNI = $ls.vdnId
+            
+            # get key list (dvportgroup-219, dvportgroup-410..)
+            $keys = $ls.vdsContextWithBacking | where backingType -eq "portgroup" | select backingValue
+
+            # get distributed virtual portgroups
+            $dvps = Get-VirtualPortGroup | where key -in $keys.backingValue
+
+            $dvps | %{
+                $dvp = $_
+                $r.DVPort = $dvp.Name
+            
+                $vmlist = Get-VM -DistributedSwitch $dvp.VirtualSwitch
+                $vmlist | %{
+                    $vm = $_
+                    Get-NetworkAdapter $vm | %{
+                        $adapter = $_
+                        if($adapter.NetworkName -eq $dvp.Name){
+                            $r.VMName     = $vm.Name
+                            $r.Id         = $vm.Id
+                            $r.Host       = $vm.VMHost
+                            $r.PowerState = $vm.PowerState
+                            if($r -notin $result){ $result += $r }
+                        }
+                    }
+                }
+            }
+        }
+        $result
     }
 }
 
@@ -863,4 +1134,6 @@ function Get-NSXUsedLicenseCount {
   $allvm.count - $edges.count
 }
 
+
 Export-ModuleMember -Function *
+Import-Module VMware.VimAutomation.Vds
