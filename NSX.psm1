@@ -656,8 +656,8 @@ function New-NSXLogicalSwitch {
         [System.Net.WebClient]$client = $global:nsx_api_client
     )
     process {
-        [xml]$transportZone = $c.DownloadString("/api/2.0/vdn/scopes")
-        $scopeId = $t.vdnScopes.vdnScope.objectId
+        [xml]$transportZone = $client.DownloadString("/api/2.0/vdn/scopes")
+        $scopeId = $transportZone.vdnScopes.vdnScope.objectId
         
         [xml]$xml = "<virtualWireCreateSpec><name></name><description></description><tenantId></tenantId><guestVlanAllowed>true</guestVlanAllowed></virtualWireCreateSpec>"
         $ls = $xml.virtualWireCreateSpec
