@@ -341,6 +341,17 @@ function Remove-NSXDFWRule {
     }
 }
 
+function Clear-NSXDFWRules {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory=$false)]
+        [System.Net.WebClient]$client = $global:nsx_api_client
+    )
+    process {
+        $client.UploadString("/api/4.0/firewall/globalroot-0/config", "DELETE", "")
+    }
+}
+
 function Copy-NSXDFWSection {
     [CmdletBinding()]
     param(
@@ -989,9 +1000,9 @@ function Get-NSXExclusionList {
     )
     process {
         [xml]$xml = $client.DownloadString("/api/2.1/app/excludelist")
-        $memeber = $xml.VshieldAppConfiguration.excludeListConfiguration.excludeMember.member
+        $member = $xml.VshieldAppConfiguration.excludeListConfiguration.excludeMember.member
         if($member){
-            $memeber | %{
+            $member | %{
                 $_ | Add-Member -Force -MemberType ScriptMethod -Name Delete -Value {
                     [System.Net.WebClient]$client = $global:nsx_api_client
                     $id = $this.objectId
@@ -1000,7 +1011,7 @@ function Get-NSXExclusionList {
                 }
             }
         }
-        return $memeber
+        return $member
     }
 }
 
